@@ -71,32 +71,28 @@ class LayerNorm(nn.Module):
         return self.a_2 * (x - mean) / (std + self.eps) + self.b_2
 
 
-class SublayerConnection(nn.Module):
-    def __init__(self, size, dropout):
-        super(SublayerConnection, self).__init__()
-        self.norm = LayerNorm(size)
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, x, sublayer):
-        # sublayerとしてself-attentionやfeedforwardがある
-        # forwardにsublayer moduleを与える実装は直感的にわかりにくい
-        # TODO: この実装はおそらく間違っている（normが一番外に来るべき）
-        return x + self.dropout(sublayer(self.norm(x)))
-
-
 class EncoderLayer(nn.Module):
     def __init__(self, size, self_attn, feed_forward, dropout):
         super(EncoderLayer, self).__init__()
+        self.size = size
+        self.norm1 = LayerNorm(size)
+        self.norm2 = LayerNorm(size)
         self.self_attn = self_attn
         self.feed_forward = feed_forward
-        # sublayerはself_attnとfeed_forwardの2つ
-        self.sublayer = clones(SublayerConnection(size, dropout), 2)
-        self.size = size
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, mask):
-        # sublayerのforwardの第２引数にmoduleを与える実装になっている
-        x = self.sublayer[0](x, lambda x: self.self_attn(x, x, x, mask))
-        return self.sublayer[1](x, self.feed_forward)
+        input_x = x
+        x = self.norm1(x)
+        x = self.self_attn(x, x, x, mask)
+        x = input_x + self.dropout(x)
+
+        input_x = x
+        x = self.norm2(x)
+        x = self.feed_forward(x)
+        x = input_x + self.dropout(x)
+
+        return x
 
 
 class Decoder(nn.Module):
@@ -115,19 +111,36 @@ class DecoderLayer(nn.Module):
     def __init__(self, size, self_attn, src_attn, feed_forward, dropout):
         super(DecoderLayer, self).__init__()
         self.size = size
+        self.norm1 = LayerNorm(size)
+        self.norm2 = LayerNorm(size)
+        self.norm3 = LayerNorm(size)
         self.self_attn = self_attn
         self.src_attn = src_attn
         self.feed_forward = feed_forward
-        # Decoderはself attentionとencoder-decoder attentionとfeed_forwardの3つ
-        self.sublayer = clones(SublayerConnection(size, dropout), 3)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, memory, src_mask, tgt_mask):
-        m = memory
-        x = self.sublayer[0](x, lambda x: self.self_attn(x, x, x, tgt_mask))
+        # sublayer1: self-attention
+        input_x = x
+        x = self.norm1(x)
+        x = self.self_attn(x, x, x, tgt_mask)
+        x = input_x + self.dropout(x)
+
+        # sublayer2: encoder-decoder attention
         # encoder decoder attentionはqueryはdecoderの出力で
         # keyとvalueはencoderの出力を指定
-        x = self.sublayer[1](x, lambda x: self.src_attn(x, m, m, src_mask))
-        return self.sublayer[2](x, self.feed_forward)
+        input_x = x
+        x = self.norm2(x)
+        x = self.src_attn(x, memory, memory, src_mask)
+        x = input_x + self.dropout(x)
+
+        # sublayer3: feed forward
+        input_x = x
+        x = self.norm3(x)
+        x = self.feed_forward(x)
+        x = input_x + self.dropout(x)
+
+        return x
 
 
 def attention(query, key, value, mask=None, dropout=None):
