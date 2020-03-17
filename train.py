@@ -21,6 +21,8 @@ def run_epoch(data_iter, model, loss_compute):
         batch.src_mask = batch.src_mask.to(device)
         batch.tgt_mask = batch.tgt_mask.to(device)
 
+        # モデルには入力系列、出力系列
+        # teacher forcingなのでdecoderの入力には正解の出力を入れる
         out = model.forward(batch.src, batch.tgt, batch.src_mask, batch.tgt_mask)
         loss = loss_compute(out, batch.tgt_y, batch.ntokens)
         total_loss += loss
@@ -115,12 +117,12 @@ def main():
     for epoch in range(10):
         # training
         model.train()
-        run_epoch(data_gen(V, 30, 20), model,
+        run_epoch(data_gen(V, batch_size=2, nbatches=20), model,
                   SimpleLossCompute(model.generator, criterion, model_opt))
 
         # validation
         model.eval()
-        valid_loss = run_epoch(data_gen(V, 30, 5), model,
+        valid_loss = run_epoch(data_gen(V, batch_size=2, nbatches=5), model,
                                SimpleLossCompute(model.generator, criterion, None))
         print('valid_loss:', valid_loss)
 
