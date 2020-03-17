@@ -25,7 +25,7 @@ def main():
     model.to(device)
     model.eval()
 
-    src = torch.LongTensor([[1, 3, 2, 4, 5, 6, 7, 8, 10, 9]]).to(device)
+    src = torch.LongTensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]]).to(device)
     src_mask = torch.ones(1, 1, 10).to(device)
 
     result = greedy_decode(model, src, src_mask, max_len=10, start_symbol=1)

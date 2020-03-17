@@ -39,22 +39,17 @@ class Generator(nn.Module):
         return F.log_softmax(self.proj(x), dim=-1)
 
 
-def clones(module, N):
-    return nn.ModuleList([copy.deepcopy(module) for _ in range(N)])
-
-
 class Encoder(nn.Module):
     def __init__(self, layer, N):
         super(Encoder, self).__init__()
         # layerにはEncoderLayerを与える
-        self.layers = clones(layer, N)
+        self.layers = nn.ModuleList([copy.deepcopy(layer) for _ in range(N)])
         self.norm = LayerNorm(layer.size)
 
     def forward(self, x, mask):
         for layer in self.layers:
             x = layer(x, mask)
-        # TODO: Encoderの最後の出力にもLayerNormかける？
-        # 各Sublayerにかけてるのでいらないのでは？
+        # 論文の図とLayerNormを入れる位置が違うが論文と同じにするとlossが下がらない
         return self.norm(x)
 
 
@@ -82,11 +77,14 @@ class EncoderLayer(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, mask):
+        # 論文の図とLayerNormを入れる位置が違うが論文と同じにするとlossが下がらない
+        # sublayer1: self-attention
         input_x = x
         x = self.norm1(x)
         x = self.self_attn(x, x, x, mask)
         x = input_x + self.dropout(x)
 
+        # sublayer2: feed forward
         input_x = x
         x = self.norm2(x)
         x = self.feed_forward(x)
@@ -98,7 +96,7 @@ class EncoderLayer(nn.Module):
 class Decoder(nn.Module):
     def __init__(self, layer, N):
         super(Decoder, self).__init__()
-        self.layers = clones(layer, N)
+        self.layers = nn.ModuleList([copy.deepcopy(layer) for _ in range(N)])
         self.norm = LayerNorm(layer.size)
 
     def forward(self, x, memory, src_mask, tgt_mask):
@@ -159,12 +157,21 @@ def attention(query, key, value, mask=None, dropout=None):
 class MultiHeadAttention(nn.Module):
     def __init__(self, h, d_model, dropout=0.1):
         super(MultiHeadAttention, self).__init__()
+
+        # d_modelは全ヘッドを集めた次元になっている
+        # d_kは各ヘッドの次元
         assert d_model % h == 0
         self.d_k = d_model // h
+
         # hはヘッドの数
         self.h = h
+
         # WQ, WK, WV, WOの4つ
-        self.linears = clones(nn.Linear(d_model, d_model), 4)
+        self.wq = nn.Linear(d_model, d_model)
+        self.wk = nn.Linear(d_model, d_model)
+        self.wv = nn.Linear(d_model, d_model)
+        self.wo = nn.Linear(d_model, d_model)
+
         self.attn = None
         self.dropout = nn.Dropout(p=dropout)
 
@@ -173,16 +180,21 @@ class MultiHeadAttention(nn.Module):
             mask = mask.unsqueeze(1)
         nbatches = query.size(0)
 
-        # TODO: この書き方はわかりづらい
-        query, key, value = [
-            l(x).view(nbatches, -1, self.h, self.d_k).transpose(1, 2)
-            for l, x in zip(self.linears, (query, key, value))
-        ]
+        # self-attentionの場合は、query=key=value=xになっている
+        # encoder-decoder attentionの場合は、query=x, key=value=memoryになっている
+        query = self.wq(query)
+        key = self.wk(key)
+        value = self.wv(value)
+
+        # ここで各ヘッドごとに独立にattentionを計算してから元のサイズにマージ
+        query = query.view(nbatches, -1, self.h, self.d_k).transpose(1, 2)
+        key = key.view(nbatches, -1, self.h, self.d_k).transpose(1, 2)
+        value = value.view(nbatches, -1, self.h, self.d_k).transpose(1, 2)
 
         x, self.attn = attention(query, key, value, mask=mask, dropout=self.dropout)
-
         x = x.transpose(1, 2).contiguous().view(nbatches, -1, self.h * self.d_k)
-        return self.linears[-1](x)
+
+        return self.wo(x)
 
 
 class PositionwiseFeedForward(nn.Module):
