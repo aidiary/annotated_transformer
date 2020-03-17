@@ -1,3 +1,5 @@
+from comet_ml import Experiment
+
 import os
 import time
 import torch
@@ -7,6 +9,8 @@ from data import data_gen
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print('device:', device)
+
+experiment = Experiment(project_name='misc', auto_metric_logging=False)
 
 
 def run_epoch(data_iter, model, loss_compute):
@@ -109,21 +113,28 @@ def main():
     os.makedirs('checkpoint', exist_ok=True)
 
     V = 11
+    num_epochs = 10
+    batch_size = 30
+    train_batches = 20
+    test_batches = 5
+
     criterion = LabelSmoothing(size=V, padding_idx=0, smoothing=0.0)
     model = make_model(V, V, N=2).to(device)
     model_opt = NoamOpt(model.src_embed[0].d_model, 1, 400,
                         torch.optim.Adam(model.parameters(), lr=0, betas=(0.9, 0.98), eps=1e-9))
 
-    for epoch in range(10):
+    for epoch in range(num_epochs):
         # training
         model.train()
-        run_epoch(data_gen(V, batch_size=2, nbatches=20), model,
-                  SimpleLossCompute(model.generator, criterion, model_opt))
+        train_loss = run_epoch(data_gen(V, batch_size=batch_size, nbatches=train_batches), model,
+                               SimpleLossCompute(model.generator, criterion, model_opt))
+        experiment.log_metric('train_loss', train_loss, step=epoch)
 
         # validation
         model.eval()
-        valid_loss = run_epoch(data_gen(V, batch_size=2, nbatches=5), model,
+        valid_loss = run_epoch(data_gen(V, batch_size=30, nbatches=test_batches), model,
                                SimpleLossCompute(model.generator, criterion, None))
+        experiment.log_metric('valid_loss', valid_loss, step=epoch)
         print('valid_loss:', valid_loss)
 
     torch.save(model.state_dict(), 'checkpoint/model.pt')
