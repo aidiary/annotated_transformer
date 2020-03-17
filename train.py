@@ -1,8 +1,12 @@
+import os
 import time
 import torch
 import torch.nn as nn
 from model import make_model
 from data import data_gen
+
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+print('device:', device)
 
 
 def run_epoch(data_iter, model, loss_compute):
@@ -11,6 +15,12 @@ def run_epoch(data_iter, model, loss_compute):
     total_loss = 0
     tokens = 0
     for i, batch in enumerate(data_iter):
+        batch.src = batch.src.to(device)
+        batch.tgt = batch.tgt.to(device)
+        batch.tgt_y = batch.tgt_y.to(device)
+        batch.src_mask = batch.src_mask.to(device)
+        batch.tgt_mask = batch.tgt_mask.to(device)
+
         out = model.forward(batch.src, batch.tgt, batch.src_mask, batch.tgt_mask)
         loss = loss_compute(out, batch.tgt_y, batch.ntokens)
         total_loss += loss
@@ -57,7 +67,7 @@ def get_std_opt(model):
 class LabelSmoothing(nn.Module):
     def __init__(self, size, padding_idx, smoothing=0.0):
         super(LabelSmoothing, self).__init__()
-        self.criterion = nn.KLDivLoss(size_average=False)
+        self.criterion = nn.KLDivLoss(reduction='sum')
         self.padding_idx = padding_idx
         self.confidence = 1.0 - smoothing
         self.smoothing = smoothing
@@ -78,8 +88,6 @@ class LabelSmoothing(nn.Module):
 
 
 class SimpleLossCompute:
-    "A simple loss compute and train function."
-
     def __init__(self, generator, criterion, opt=None):
         self.generator = generator
         self.criterion = criterion
@@ -96,20 +104,27 @@ class SimpleLossCompute:
 
 
 def main():
+    os.makedirs('checkpoint', exist_ok=True)
+
     V = 11
     criterion = LabelSmoothing(size=V, padding_idx=0, smoothing=0.0)
-    model = make_model(V, V, N=2)
+    model = make_model(V, V, N=2).to(device)
     model_opt = NoamOpt(model.src_embed[0].d_model, 1, 400,
                         torch.optim.Adam(model.parameters(), lr=0, betas=(0.9, 0.98), eps=1e-9))
 
     for epoch in range(10):
+        # training
         model.train()
         run_epoch(data_gen(V, 30, 20), model,
                   SimpleLossCompute(model.generator, criterion, model_opt))
+
+        # validation
         model.eval()
         valid_loss = run_epoch(data_gen(V, 30, 5), model,
                                SimpleLossCompute(model.generator, criterion, None))
         print('valid_loss:', valid_loss)
+
+    torch.save(model.state_dict(), 'checkpoint/model.pt')
 
 
 if __name__ == "__main__":
